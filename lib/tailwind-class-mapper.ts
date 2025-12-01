@@ -948,13 +948,13 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
 }
 
 /**
- * Breakpoint Configuration (Desktop-First)
- * Desktop is base (no prefix), tablet and mobile use max-width overrides
+ * Breakpoint Configuration (Mobile-First)
+ * Mobile is base (no prefix), tablet and desktop use min-width overrides
  */
 export const BREAKPOINT_CONFIG = {
-  desktop: { prefix: '', maxWidth: null },
-  tablet: { prefix: 'max-lg:', maxWidth: 1023 },
-  mobile: { prefix: 'max-md:', maxWidth: 767 },
+  mobile: { prefix: '', minWidth: null },      // Base styles (no prefix)
+  tablet: { prefix: 'md:', minWidth: 768 },    // Tablet and up (≥ 768px)
+  desktop: { prefix: 'lg:', minWidth: 1024 },  // Desktop and up (≥ 1024px)
 } as const;
 
 /**
@@ -972,8 +972,8 @@ export const UI_STATE_CONFIG = {
 export type Breakpoint = 'mobile' | 'tablet' | 'desktop';
 
 /**
- * Convert breakpoint to Tailwind prefix (Desktop-First)
- * desktop → '' (base), tablet → 'max-lg:', mobile → 'max-md:'
+ * Convert breakpoint to Tailwind prefix (Mobile-First)
+ * mobile → '' (base), tablet → 'md:', desktop → 'lg:'
  */
 export function getBreakpointPrefix(breakpoint: Breakpoint): string {
   return BREAKPOINT_CONFIG[breakpoint].prefix;

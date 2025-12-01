@@ -101,11 +101,14 @@
   }
 
   /**
-   * Get classes string from layer with UI state applied
+   * Get classes string from layer with UI state and breakpoint filtering applied
    * For hover/focus/active states, we need to make Tailwind's state classes apply
    */
   function getClassesString(layer) {
     let classes = Array.isArray(layer.classes) ? layer.classes.join(' ') : (layer.classes || '');
+
+    // First, filter classes by current breakpoint
+    classes = filterClassesByBreakpoint(classes, currentBreakpoint);
 
     if (currentUIState === 'neutral') {
       // In neutral state, keep only non-state classes
@@ -116,6 +119,53 @@
     }
 
     return classes;
+  }
+
+  /**
+   * Filter classes by breakpoint (Mobile-First approach)
+   * Mobile viewport shows: base classes only
+   * Tablet viewport shows: base + md: classes
+   * Desktop viewport shows: base + md: + lg: classes
+   */
+  function filterClassesByBreakpoint(classesString, breakpoint) {
+    if (!classesString) return classesString;
+    
+    const classArray = classesString.split(' ').filter(Boolean);
+    const filtered = [];
+    
+    for (const cls of classArray) {
+      // Check what breakpoint prefix this class has
+      const hasMd = cls.startsWith('md:') || cls.includes(' md:');
+      const hasLg = cls.startsWith('lg:') || cls.includes(' lg:');
+      
+      // Base classes (no breakpoint prefix) - always include
+      if (!hasMd && !hasLg) {
+        filtered.push(cls);
+        continue;
+      }
+      
+      // Mobile viewport - only base classes (already handled above)
+      if (breakpoint === 'mobile') {
+        continue; // Skip all prefixed classes
+      }
+      
+      // Tablet viewport - include md: classes (and base classes)
+      if (breakpoint === 'tablet') {
+        if (hasMd && !hasLg) {
+          filtered.push(cls);
+        }
+        continue;
+      }
+      
+      // Desktop viewport - include both md: and lg: classes (and base classes)
+      if (breakpoint === 'desktop') {
+        if (hasMd || hasLg) {
+          filtered.push(cls);
+        }
+      }
+    }
+    
+    return filtered.join(' ');
   }
 
   /**
@@ -879,8 +929,8 @@
   }
 
   function updateBreakpoint() {
-    // Breakpoint is handled by parent (iframe width)
-    // Could add visual indicators here if needed
+    // Re-render when breakpoint changes to apply correct classes
+    render();
   }
 
   /**

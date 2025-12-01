@@ -857,7 +857,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           e.stopPropagation();
           e.stopImmediatePropagation();
           setZoom(prev => Math.min(prev + 10, 1000));
-          return;
+          return false;
         }
 
         // Zoom out: Cmd/Ctrl + -
@@ -866,7 +866,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           e.stopPropagation();
           e.stopImmediatePropagation();
           setZoom(prev => Math.max(prev - 10, 10));
-          return;
+          return false;
         }
 
         // Zoom to 100%: Cmd/Ctrl + 0
@@ -875,37 +875,38 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
           e.stopPropagation();
           e.stopImmediatePropagation();
           setZoom(100);
-          return;
+          return false;
         }
 
-        // Zoom to Fit: Cmd/Ctrl + 1
+        // Zoom to Fit: Cmd/Ctrl + 1 (fits vertically and centers)
         if (e.key === '1' || e.code === 'Digit1' || e.code === 'Numpad1') {
           e.preventDefault();
           e.stopPropagation();
           e.stopImmediatePropagation();
           const canvasContainer = document.querySelector('[data-canvas-container]');
           if (canvasContainer) {
-            const containerWidth = canvasContainer.clientWidth - 64;
-            const viewportWidth = viewportMode === 'desktop' ? 1366 : viewportMode === 'tablet' ? 768 : 375;
-            const fitZoom = Math.floor((containerWidth / viewportWidth) * 100);
+            const containerHeight = canvasContainer.clientHeight;
+            // Assume average viewport height if not available
+            const viewportHeight = 800;
+            const fitZoom = Math.floor((containerHeight * 0.9 / viewportHeight) * 100);
             setZoom(Math.max(10, Math.min(fitZoom, 1000)));
           }
-          return;
+          return false;
         }
 
-        // Autofit: Cmd/Ctrl + 2
+        // Autofit: Cmd/Ctrl + 2 (fits horizontally - fills 100% width)
         if (e.key === '2' || e.code === 'Digit2' || e.code === 'Numpad2') {
           e.preventDefault();
           e.stopPropagation();
           e.stopImmediatePropagation();
           const canvasContainer = document.querySelector('[data-canvas-container]');
           if (canvasContainer) {
-            const containerWidth = canvasContainer.clientWidth - 128;
+            const containerWidth = canvasContainer.clientWidth;
             const viewportWidth = viewportMode === 'desktop' ? 1366 : viewportMode === 'tablet' ? 768 : 375;
             const fitZoom = Math.floor((containerWidth / viewportWidth) * 100);
             setZoom(Math.max(10, Math.min(fitZoom, 1000)));
           }
-          return;
+          return false;
         }
       }
 
@@ -1248,7 +1249,14 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     // Use capture phase to catch events before browser handles them
     // This is especially important for Cursor/Electron browsers
     window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    
+    // Also add in bubble phase for double prevention
+    window.addEventListener('keydown', handleKeyDown, false);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keydown', handleKeyDown, false);
+    };
   }, [
     activeTab,
     selectedLayerId,

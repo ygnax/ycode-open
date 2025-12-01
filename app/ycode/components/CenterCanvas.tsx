@@ -16,7 +16,6 @@ import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
 import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 // 5. Stores
 import { useEditorStore } from '@/stores/useEditorStore';
@@ -83,27 +82,41 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const [pagePopoverOpen, setPagePopoverOpen] = useState(false);
   const [collapsedFolderIds, setCollapsedFolderIds] = useState<Set<string>>(new Set());
   const [isPanning, setIsPanning] = useState(false);
-  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [iframeHeight, setIframeHeight] = useState<number | null>(null);
+  const [spacePressed, setSpacePressed] = useState(false);
+  
+  // Transform-based zoom and pan state (Framer-style)
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const desktopIframeRef = useRef<HTMLIFrameElement>(null);
+  const tabletIframeRef = useRef<HTMLIFrameElement>(null);
+  const mobileIframeRef = useRef<HTMLIFrameElement>(null);
+  const transformLayerRef = useRef<HTMLDivElement>(null);
+  
+  // Refs to avoid stale closures in event handlers
+  const panXRef = useRef(0);
+  const panYRef = useRef(0);
+  const zoomRef = useRef(100);
 
-  // Calculate scaled width for horizontal overflow when zoomed in
-  // Include padding (p-8 = 32px per side = 64px total) in the width calculation
-  const scaledWidth = useMemo(() => {
-    if (zoom <= 100) return undefined;
+  // Calculate dimensions for scrollable area when zoomed
+  const { wrapperWidth, wrapperHeight } = useMemo(() => {
     const viewportWidth = parseInt(viewportSizes[viewportMode].width);
-    const padding = 64; // p-8 = 32px * 2 sides
-    return viewportWidth * (zoom / 100) + padding;
-  }, [zoom, viewportMode]);
-
-  // Calculate spacer width for horizontal scrolling when zoomed in
-  // Spacer should be at least half the container width to allow scrolling in both directions
-  const spacerWidth = useMemo(() => {
-    if (zoom <= 100) return undefined;
-    // Use a large fixed value to ensure scrolling works in both directions
-    return '50vw';
-  }, [zoom]);
+    const viewportHeight = iframeHeight || 600;
+    const padding = 64; // 32px on each side (p-8)
+    
+    // Calculate scaled dimensions
+    const scaledWidth = viewportWidth * (zoom / 100);
+    const scaledHeight = viewportHeight * (zoom / 100);
+    
+    // Add padding to the scaled dimensions
+    return {
+      wrapperWidth: scaledWidth + padding,
+      wrapperHeight: scaledHeight + padding,
+    };
+  }, [viewportMode, zoom, iframeHeight]);
 
   // Optimize store subscriptions - use selective selectors
   const draftsByPageId = usePagesStore((state) => state.draftsByPageId);
@@ -402,12 +415,25 @@ const CenterCanvas = React.memo(function CenterCanvas({
     );
   }, [collapsedFolderIds, currentPageId, toggleFolder, handlePageSelect]);
 
-  // Send layers to iframe whenever they change
+  // Helper function to send messages to all iframes
+  const sendToAllIframes = useCallback((message: any) => {
+    if (desktopIframeRef.current) {
+      sendToIframe(desktopIframeRef.current, message);
+    }
+    if (tabletIframeRef.current) {
+      sendToIframe(tabletIframeRef.current, message);
+    }
+    if (mobileIframeRef.current) {
+      sendToIframe(mobileIframeRef.current, message);
+    }
+  }, []);
+
+  // Send layers to all iframes whenever they change
   useEffect(() => {
-    if (!iframeReady || !iframeRef.current) return;
+    if (!iframeReady) return;
 
     const { layers: serializedLayers, componentMap } = serializeLayers(layers, components);
-    sendToIframe(iframeRef.current, {
+    sendToAllIframes({
       type: 'UPDATE_LAYERS',
       payload: {
         layers: serializedLayers,
@@ -418,27 +444,46 @@ const CenterCanvas = React.memo(function CenterCanvas({
         collectionFields: collectionFieldsFromStore,
       },
     });
-  }, [layers, selectedLayerId, iframeReady, components, editingComponentId, collectionItemsFromStore, collectionFieldsFromStore]);
+  }, [layers, selectedLayerId, iframeReady, components, editingComponentId, collectionItemsFromStore, collectionFieldsFromStore, sendToAllIframes]);
 
-  // Send breakpoint updates to iframe
+  // Send breakpoint updates to each iframe (each iframe shows its own breakpoint)
   useEffect(() => {
-    if (!iframeReady || !iframeRef.current) return;
+    if (!iframeReady) return;
 
-    sendToIframe(iframeRef.current, {
-      type: 'UPDATE_BREAKPOINT',
-      payload: { breakpoint: viewportMode },
-    });
-  }, [viewportMode, iframeReady]);
+    // Send desktop breakpoint to desktop iframe
+    if (desktopIframeRef.current) {
+      sendToIframe(desktopIframeRef.current, {
+        type: 'UPDATE_BREAKPOINT',
+        payload: { breakpoint: 'desktop' },
+      });
+    }
 
-  // Send UI state updates to iframe
+    // Send tablet breakpoint to tablet iframe
+    if (tabletIframeRef.current) {
+      sendToIframe(tabletIframeRef.current, {
+        type: 'UPDATE_BREAKPOINT',
+        payload: { breakpoint: 'tablet' },
+      });
+    }
+
+    // Send mobile breakpoint to mobile iframe
+    if (mobileIframeRef.current) {
+      sendToIframe(mobileIframeRef.current, {
+        type: 'UPDATE_BREAKPOINT',
+        payload: { breakpoint: 'mobile' },
+      });
+    }
+  }, [iframeReady]);
+
+  // Send UI state updates to all iframes
   useEffect(() => {
-    if (!iframeReady || !iframeRef.current) return;
+    if (!iframeReady) return;
 
-    sendToIframe(iframeRef.current, {
+    sendToAllIframes({
       type: 'UPDATE_UI_STATE',
       payload: { uiState: activeUIState },
     });
-  }, [activeUIState, iframeReady]);
+  }, [activeUIState, iframeReady, sendToAllIframes]);
 
   // Listen for messages from iframe
   useEffect(() => {
@@ -514,160 +559,118 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return cleanup;
   }, [currentPageId, editingComponentId, componentDrafts, setSelectedLayerId, updateLayer]);
 
-  // Zoom handlers
+  // Zoom handlers with transform-based approach
   const handleZoomIn = useCallback(() => {
-    setZoom(Math.min(zoom + 10, 1000)); // Max 1000%
+    const newZoom = Math.min(zoom + 10, 1000); // Max 1000%
+    setZoom(newZoom);
   }, [zoom, setZoom]);
 
   const handleZoomOut = useCallback(() => {
-    setZoom(Math.max(zoom - 10, 10)); // Min 10%
+    const newZoom = Math.max(zoom - 10, 10); // Min 10%
+    setZoom(newZoom);
   }, [zoom, setZoom]);
 
   const handleZoomTo100 = useCallback(() => {
     setZoom(100);
+    // Reset pan position when going to 100%
+    setPanX(0);
+    setPanY(0);
   }, [setZoom]);
 
   const handleZoomToFit = useCallback(() => {
-    // Calculate zoom to fit based on viewport width
-    const canvasContainer = document.querySelector('[data-canvas-container]');
-    if (canvasContainer) {
-      const containerWidth = canvasContainer.clientWidth - 64; // Account for padding
-      const viewportWidth = parseInt(viewportSizes[viewportMode].width);
-      const fitZoom = Math.floor((containerWidth / viewportWidth) * 100);
+    // Zoom to Fit - fits vertically and centers the canvas
+    const container = canvasContainerRef.current;
+    if (container) {
+      const containerHeight = container.clientHeight;
+      const viewportHeight = iframeHeight || 600;
+      
+      // Calculate zoom to fit height with some margin (90%)
+      const fitZoom = Math.floor((containerHeight * 0.9 / viewportHeight) * 100);
+      
       setZoom(Math.max(10, Math.min(fitZoom, 1000)));
+      
+      // Center the canvas
+      setPanX(0);
+      setPanY(0);
     }
-  }, [viewportMode, setZoom]);
+  }, [iframeHeight, setZoom]);
 
   const handleAutofit = useCallback(() => {
-    // Similar to zoom to fit but with more margin
-    const canvasContainer = document.querySelector('[data-canvas-container]');
-    if (canvasContainer) {
-      const containerWidth = canvasContainer.clientWidth - 128; // More margin
-      const viewportWidth = parseInt(viewportSizes[viewportMode].width);
-      const fitZoom = Math.floor((containerWidth / viewportWidth) * 100);
+    // Autofit - fits all three viewports horizontally with 32px gaps
+    const container = canvasContainerRef.current;
+    if (container) {
+      const containerWidth = container.clientWidth;
+      
+      const GAP = 32; // 32px gap padding
+      const VIEWPORT_GAP = 32; // Gap between viewports
+      
+      // Calculate total width of all three viewports
+      const desktopWidth = parseInt(viewportSizes.desktop.width);
+      const tabletWidth = parseInt(viewportSizes.tablet.width);
+      const mobileWidth = parseInt(viewportSizes.mobile.width);
+      
+      const totalViewportWidth = desktopWidth + tabletWidth + mobileWidth + (VIEWPORT_GAP * 2);
+      
+      // Calculate zoom to fit all three viewports with padding
+      const availableWidth = containerWidth - (GAP * 2);
+      const fitZoom = Math.floor((availableWidth / totalViewportWidth) * 100);
       setZoom(Math.max(10, Math.min(fitZoom, 1000)));
-    }
-  }, [viewportMode, setZoom]);
-
-  // Preserve scroll position when zoom changes to prevent bouncing
-  const previousZoomRef = useRef(zoom);
-  useEffect(() => {
-    const container = canvasContainerRef.current;
-    if (!container) {
-      previousZoomRef.current = zoom;
-      return;
-    }
-
-    const previousZoom = previousZoomRef.current;
-    const wasZoomedOut = previousZoom <= 100;
-    const isZoomedIn = zoom > 100;
-    const isZoomedOut = zoom <= 100;
-
-    // Case 1: Transitioning from zoom <= 100 to zoom > 100
-    // Center the canvas by scrolling to the middle of the spacers
-    if (wasZoomedOut && isZoomedIn) {
-      requestAnimationFrame(() => {
-        // Get the container and canvas dimensions
-        const containerWidth = container.clientWidth;
-        const canvasWidth = parseInt(viewportSizes[viewportMode].width);
-        const scaledCanvasWidth = canvasWidth * (zoom / 100);
-        
-        // Calculate scroll position to center the canvas
-        // The spacer width is 50vw on each side
-        const spacerWidth = window.innerWidth * 0.5;
-        const totalWidth = spacerWidth + scaledCanvasWidth + spacerWidth;
-        
-        // Center horizontally by scrolling to show the canvas in the middle
-        container.scrollLeft = spacerWidth + (scaledCanvasWidth / 2) - (containerWidth / 2);
-      });
-    }
-
-    // Case 2: Already zoomed in, just adjusting zoom level
-    // Scale scroll position proportionally to maintain the same visual center
-    if (!wasZoomedOut && isZoomedIn && previousZoom !== zoom) {
-      const oldScrollLeft = container.scrollLeft;
-      const oldScrollTop = container.scrollTop;
-      const zoomRatio = zoom / previousZoom;
-
-      requestAnimationFrame(() => {
-        // Scale scroll position by zoom ratio to maintain relative position
-        container.scrollLeft = oldScrollLeft * zoomRatio;
-        container.scrollTop = oldScrollTop * zoomRatio;
-      });
-    }
-
-    // Case 3: Zooming out to <= 100%
-    // Reset scroll to 0 since we'll be using flexbox centering
-    if (isZoomedOut && !wasZoomedOut) {
-      container.scrollLeft = 0;
+      
+      // Center horizontally, show top of iframes
+      setPanX(0);
+      setPanY(0);
+      
+      // Reset native scroll if any
       container.scrollTop = 0;
+      container.scrollLeft = 0;
     }
+  }, [setZoom]);
 
-    previousZoomRef.current = zoom;
-  }, [zoom, viewportMode]);
-
-  // Pan/drag handlers for zoomed canvas
-  // Enable panning when zoomed in using middle mouse button or spacebar + drag
+  // Keep refs in sync with state
   useEffect(() => {
-    if (zoom <= 100) {
-      setIsPanning(false);
-      return;
+    panXRef.current = panX;
+    panYRef.current = panY;
+    zoomRef.current = zoom;
+  }, [panX, panY, zoom]);
+
+  // Sync iframeRef with the currently active viewport
+  useEffect(() => {
+    if (viewportMode === 'desktop' && desktopIframeRef.current) {
+      iframeRef.current = desktopIframeRef.current;
+    } else if (viewportMode === 'tablet' && tabletIframeRef.current) {
+      iframeRef.current = tabletIframeRef.current;
+    } else if (viewportMode === 'mobile' && mobileIframeRef.current) {
+      iframeRef.current = mobileIframeRef.current;
     }
+    
+    // Update the editor store's active breakpoint when viewport changes
+    useEditorStore.getState().setActiveBreakpoint(viewportMode);
+  }, [viewportMode]);
 
-    const container = canvasContainerRef.current;
-    if (!container) return;
+  // Autofit on initial load (default mode)
+  useEffect(() => {
+    if (iframeReady && canvasContainerRef.current) {
+      // Delay slightly to ensure container has proper dimensions
+      const timer = setTimeout(() => {
+        handleAutofit();
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [iframeReady, currentPageId, viewportMode, handleAutofit]);
 
-    let isDragging = false;
-    let startX = 0;
-    let startY = 0;
-    let scrollLeft = 0;
-    let scrollTop = 0;
-    let spacePressed = false;
-
-    const handleMouseDown = (e: MouseEvent) => {
-      // Middle mouse button (button 1) or spacebar + left click
-      const canPan = e.button === 1 || (e.button === 0 && spacePressed);
-
-      if (canPan) {
-        // Don't pan if clicking on the iframe
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'IFRAME' || target.closest('iframe')) {
-          return;
-        }
-
-        isDragging = true;
-        setIsPanning(true);
-        startX = e.pageX - container.offsetLeft;
-        startY = e.pageY - container.offsetTop;
-        scrollLeft = container.scrollLeft;
-        scrollTop = container.scrollTop;
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const x = e.pageX - container.offsetLeft;
-      const y = e.pageY - container.offsetTop;
-      const walkX = (x - startX) * 1; // Scroll speed multiplier
-      const walkY = (y - startY) * 1;
-      container.scrollLeft = scrollLeft - walkX;
-      container.scrollTop = scrollTop - walkY;
-    };
-
-    const handleMouseUp = () => {
-      isDragging = false;
-      setIsPanning(false);
-    };
-
+  // Spacebar key handler for pan mode
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) {
-        spacePressed = true;
-        // Prevent page scroll when spacebar is pressed
-        if (container.contains(document.activeElement) || document.activeElement === document.body) {
+        // Check if user is typing in an input
+        const target = e.target as HTMLElement;
+        const isInputFocused = target.tagName === 'INPUT' ||
+                               target.tagName === 'TEXTAREA' ||
+                               target.isContentEditable;
+        
+        if (!isInputFocused) {
+          setSpacePressed(true);
           e.preventDefault();
         }
       }
@@ -675,113 +678,105 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
-        spacePressed = false;
-        if (isDragging) {
-          isDragging = false;
-          setIsPanning(false);
-        }
+        setSpacePressed(false);
+        setIsPanning(false);
       }
     };
 
-    const handleWheel = (e: WheelEvent) => {
-      // Only handle spacebar panning here - zoom is handled globally
-      if (spacePressed && container.contains(e.target as Node)) {
-        // Prevent default scroll when spacebar is held (for panning mode)
-        e.preventDefault();
-      }
-    };
-
-    // Use capture phase to catch events early
-    container.addEventListener('mousedown', handleMouseDown, true);
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
 
-    // Listen for wheel events on container
-    container.addEventListener('wheel', handleWheel, { passive: false });
-
-    // Also listen on iframe contentDocument if it exists (for events inside iframe)
-    const iframe = container.querySelector('iframe');
-    if (iframe?.contentDocument) {
-      iframe.contentDocument.addEventListener('wheel', handleWheel, { passive: false });
-    }
-
     return () => {
-      container.removeEventListener('mousedown', handleMouseDown, true);
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
-      container.removeEventListener('wheel', handleWheel);
+    };
+  }, []);
 
-      // Clean up iframe listener
-      const iframe = container.querySelector('iframe');
-      if (iframe?.contentDocument) {
-        iframe.contentDocument.removeEventListener('wheel', handleWheel);
+  // Pan/drag handlers with Framer-style transform
+  useEffect(() => {
+    const container = canvasContainerRef.current;
+    const iframe = iframeRef.current;
+    if (!container) return;
+
+    let isDragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startPanX = 0;
+    let startPanY = 0;
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Only block panning if clicking ON the iframe element itself
+      const isClickOnIframe = target.tagName === 'IFRAME';
+      
+      // Pan with spacebar + left click, middle mouse button, or direct click
+      const isSpacebarPan = e.button === 0 && spacePressed;
+      const isMiddleClick = e.button === 1;
+      const isDirectPan = e.button === 0 && !spacePressed && !isClickOnIframe;
+
+      const canPan = isSpacebarPan || isMiddleClick || isDirectPan;
+
+      if (canPan) {
+        isDragging = true;
+        setIsPanning(true);
+        startX = e.clientX;
+        startY = e.clientY;
+        // Use refs to get current values, avoiding stale closure
+        startPanX = panXRef.current;
+        startPanY = panYRef.current;
+        e.preventDefault();
+        e.stopPropagation();
       }
     };
-  }, [zoom, setZoom]);
 
-  // Global wheel handler for zoom - works regardless of mouse position
-  // This allows zoom to work anywhere in the editor, including inside the iframe
-  useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      // Only zoom when Ctrl (Windows/Linux) or Cmd (Mac) is pressed
-      // On Mac, trackpad pinch automatically sets metaKey
-      if (!(e.ctrlKey || e.metaKey)) {
-        return; // Let normal scrolling happen
-      }
-
-      // Check if user is typing in an input/textarea - don't interfere
-      const target = e.target as HTMLElement;
-      const isInputFocused = target.tagName === 'INPUT' ||
-                             target.tagName === 'TEXTAREA' ||
-                             target.isContentEditable;
-
-      if (isInputFocused) {
-        return; // Let input scrolling work normally
-      }
-
-      // Prevent default browser zoom behavior
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
-
-      // Handle different delta modes - trackpad gestures often use pixels (deltaMode 0)
-      let deltaY = e.deltaY;
-      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-        deltaY *= 16; // Convert lines to pixels
-      } else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-        deltaY *= 100; // Convert pages to pixels
-      }
-
-      // Calculate zoom delta - negative multiplier so scroll up zooms in
-      const zoomDelta = deltaY * -1;
-      const newZoom = Math.max(25, Math.min(200, zoom + zoomDelta));
-      setZoom(Math.round(newZoom));
+      
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+      
+      setPanX(startPanX + deltaX);
+      setPanY(startPanY + deltaY);
     };
 
-    // Attach to window for global zoom support (handles events outside iframe)
-    window.addEventListener('wheel', handleWheel, { passive: false });
+    const handleMouseUp = () => {
+      if (isDragging) {
+        isDragging = false;
+        setIsPanning(false);
+      }
+    };
+
+    // Single event listener on container - no capture phase
+    container.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
 
     return () => {
-      window.removeEventListener('wheel', handleWheel);
+      container.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [zoom, setZoom]);
+  }, [spacePressed]); // Only spacePressed in dependencies - no panX/panY!
 
-  // Also attach zoom handler to iframe contentDocument when ready
-  // This ensures zoom works even when iframe is focused/selected
+  // Scroll-to-pan handler (Framer-style: scroll without Ctrl pans the canvas)
   useEffect(() => {
-    if (!iframeReady || !iframeRef.current) return;
+    const container = canvasContainerRef.current;
+    const desktopIframe = desktopIframeRef.current;
+    const tabletIframe = tabletIframeRef.current;
+    const mobileIframe = mobileIframeRef.current;
+    if (!container) return;
 
-    const handleWheel = (e: WheelEvent) => {
-      // Only zoom when Ctrl (Windows/Linux) or Cmd (Mac) is pressed
-      if (!(e.ctrlKey || e.metaKey)) {
-        return;
+    const handleScroll = (e: WheelEvent) => {
+      // Only pan with scroll when Ctrl/Cmd is NOT pressed (zooming takes priority)
+      if (e.ctrlKey || e.metaKey) {
+        return; // Let zoom handler handle this
       }
 
-      // Check if user is typing in an input/textarea - don't interfere
+      // Check if user is typing in an input/textarea
       const target = e.target as HTMLElement;
       const isInputFocused = target.tagName === 'INPUT' ||
                              target.tagName === 'TEXTAREA' ||
@@ -791,12 +786,97 @@ const CenterCanvas = React.memo(function CenterCanvas({
         return;
       }
 
-      // Prevent default browser zoom behavior
+      e.preventDefault();
+
+      // Get current pan values from refs
+      const currentPanX = panXRef.current;
+      const currentPanY = panYRef.current;
+
+      // Pan based on scroll delta
+      // Negative because scrolling down should move content up (pan down)
+      const deltaX = e.deltaX;
+      const deltaY = e.deltaY;
+
+      setPanX(currentPanX - deltaX);
+      setPanY(currentPanY - deltaY);
+    };
+
+    // Add to container
+    container.addEventListener('wheel', handleScroll, { passive: false });
+
+    // Function to attach listener to iframe when it's ready
+    const attachToIframe = (iframe: HTMLIFrameElement | null) => {
+      if (!iframe) return;
+      
+      // Try to attach immediately if contentDocument is available
+      if (iframe.contentDocument) {
+        iframe.contentDocument.addEventListener('wheel', handleScroll, { passive: false });
+      }
+      
+      // Also set up a listener for when the iframe loads
+      const onLoad = () => {
+        if (iframe.contentDocument) {
+          iframe.contentDocument.addEventListener('wheel', handleScroll, { passive: false });
+        }
+      };
+      iframe.addEventListener('load', onLoad);
+      
+      return () => {
+        iframe.removeEventListener('load', onLoad);
+      };
+    };
+
+    const cleanupDesktop = attachToIframe(desktopIframe);
+    const cleanupTablet = attachToIframe(tabletIframe);
+    const cleanupMobile = attachToIframe(mobileIframe);
+
+    return () => {
+      container.removeEventListener('wheel', handleScroll);
+      if (desktopIframe?.contentDocument) {
+        desktopIframe.contentDocument.removeEventListener('wheel', handleScroll);
+      }
+      if (tabletIframe?.contentDocument) {
+        tabletIframe.contentDocument.removeEventListener('wheel', handleScroll);
+      }
+      if (mobileIframe?.contentDocument) {
+        mobileIframe.contentDocument.removeEventListener('wheel', handleScroll);
+      }
+      cleanupDesktop?.();
+      cleanupTablet?.();
+      cleanupMobile?.();
+    };
+  }, []);
+
+  // Zoom with mouse wheel - zoom towards cursor (Framer-style)
+  // Supports both regular Ctrl+Scroll and trackpad pinch
+  useEffect(() => {
+    const container = canvasContainerRef.current;
+    const desktopIframe = desktopIframeRef.current;
+    const tabletIframe = tabletIframeRef.current;
+    const mobileIframe = mobileIframeRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Only zoom when Ctrl (Windows/Linux) or Cmd (Mac) is pressed
+      // Trackpad pinch gestures automatically set ctrlKey=true
+      if (!(e.ctrlKey || e.metaKey)) {
+        return;
+      }
+
+      // Check if user is typing in an input/textarea
+      const target = e.target as HTMLElement;
+      const isInputFocused = target.tagName === 'INPUT' ||
+                             target.tagName === 'TEXTAREA' ||
+                             target.isContentEditable;
+
+      if (isInputFocused) {
+        return;
+      }
+
       e.preventDefault();
       e.stopPropagation();
-      e.stopImmediatePropagation();
 
-      // Handle different delta modes
+      // Calculate delta
       let deltaY = e.deltaY;
       if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) {
         deltaY *= 16;
@@ -804,25 +884,87 @@ const CenterCanvas = React.memo(function CenterCanvas({
         deltaY *= 100;
       }
 
-      // Calculate zoom delta - negative multiplier so scroll up zooms in
-      const zoomDelta = deltaY * -1;
-      const newZoom = Math.max(10, Math.min(1000, zoom + zoomDelta));
+      // Adjust sensitivity for trackpad pinch (which tends to have smaller deltaY values)
+      // Trackpad pinch usually has deltaMode = 0 (pixels) and smaller absolute values
+      // Reduced sensitivity to match Framer's gradual zoom feel
+      const sensitivity = Math.abs(deltaY) < 50 ? 0.3 : 0.15;
+      
+      // Get current zoom from ref to avoid stale closure
+      const currentZoom = zoomRef.current;
+      const currentPanX = panXRef.current;
+      const currentPanY = panYRef.current;
+      
+      // Calculate new zoom (inverted so scroll up = zoom in)
+      const zoomDelta = -deltaY * sensitivity;
+      const newZoom = Math.max(10, Math.min(1000, currentZoom + zoomDelta));
+
+      // Get cursor position relative to container
+      const rect = container.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+
+      // Calculate zoom ratio
+      const zoomRatio = newZoom / currentZoom;
+
+      // Zoom-to-cursor calculation with transform-origin: 0 0
+      // The point under the cursor should stay fixed
+      // Formula: newPan = cursor - (cursor - oldPan) * zoomRatio
+      const newPanX = cursorX - (cursorX - currentPanX) * zoomRatio;
+      const newPanY = cursorY - (cursorY - currentPanY) * zoomRatio;
+
+      // Round zoom to whole numbers for clean display
       setZoom(Math.round(newZoom));
+      setPanX(newPanX);
+      setPanY(newPanY);
     };
 
-    const iframe = iframeRef.current;
-    const contentDoc = iframe?.contentDocument;
+    // Attach to both container and window for comprehensive coverage
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    window.addEventListener('wheel', handleWheel, { passive: false });
 
-    if (contentDoc) {
-      contentDoc.addEventListener('wheel', handleWheel, { passive: false });
-
-      return () => {
-        if (contentDoc) {
-          contentDoc.removeEventListener('wheel', handleWheel);
+    // Function to attach listener to iframe when it's ready
+    const attachToIframe = (iframe: HTMLIFrameElement | null) => {
+      if (!iframe) return;
+      
+      // Try to attach immediately if contentDocument is available
+      if (iframe.contentDocument) {
+        iframe.contentDocument.addEventListener('wheel', handleWheel, { passive: false });
+      }
+      
+      // Also set up a listener for when the iframe loads
+      const onLoad = () => {
+        if (iframe.contentDocument) {
+          iframe.contentDocument.addEventListener('wheel', handleWheel, { passive: false });
         }
       };
-    }
-  }, [iframeReady, zoom, setZoom]);
+      iframe.addEventListener('load', onLoad);
+      
+      return () => {
+        iframe.removeEventListener('load', onLoad);
+      };
+    };
+
+    const cleanupDesktop = attachToIframe(desktopIframe);
+    const cleanupTablet = attachToIframe(tabletIframe);
+    const cleanupMobile = attachToIframe(mobileIframe);
+
+    return () => {
+      container.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('wheel', handleWheel);
+      if (desktopIframe?.contentDocument) {
+        desktopIframe.contentDocument.removeEventListener('wheel', handleWheel);
+      }
+      if (tabletIframe?.contentDocument) {
+        tabletIframe.contentDocument.removeEventListener('wheel', handleWheel);
+      }
+      if (mobileIframe?.contentDocument) {
+        mobileIframe.contentDocument.removeEventListener('wheel', handleWheel);
+      }
+      cleanupDesktop?.();
+      cleanupTablet?.();
+      cleanupMobile?.();
+    };
+  }, []);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col">
@@ -916,21 +1058,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
           </div>
         )}
 
-        {/* Viewport Controls */}
+        {/* Zoom Controls */}
         <div className="flex justify-center gap-2">
-          <Tabs value={viewportMode} onValueChange={(value) => setViewportMode(value as ViewportMode)}>
-            <TabsList className="w-[240px]">
-            <TabsTrigger value="desktop" title="Desktop View">
-              Desktop
-            </TabsTrigger>
-            <TabsTrigger value="tablet" title="Tablet View">
-              Tablet
-            </TabsTrigger>
-            <TabsTrigger value="mobile" title="Mobile View">
-              Phone
-            </TabsTrigger>
-          </TabsList>
-          </Tabs>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="input" size="sm">
@@ -981,146 +1110,120 @@ const CenterCanvas = React.memo(function CenterCanvas({
       <div
         ref={canvasContainerRef}
         className={cn(
-          'flex-1 overflow-auto bg-neutral-50 dark:bg-neutral-950/80',
-          zoom > 100 && isPanning && 'cursor-grabbing',
-          zoom > 100 && !isPanning && 'cursor-grab'
+          'flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-950/80 relative',
+          spacePressed && 'cursor-grab',
+          isPanning && 'cursor-grabbing',
+          !spacePressed && !isPanning && 'cursor-grab'
         )}
         data-canvas-container
       >
+        {/* Transform wrapper for Framer-style zoom/pan */}
         <div
+          ref={transformLayerRef}
           className={cn(
-            'flex p-8',
-            zoom <= 100 ? 'flex-col justify-center items-center' : 'flex-row justify-center items-start'
+            'absolute inset-0 flex items-start justify-center p-8 gap-8',
+            !isPanning && 'transition-transform duration-200 ease-out',
+            !spacePressed && !isPanning && 'cursor-grab',
+            isPanning && 'cursor-grabbing'
           )}
           style={{
-            minHeight: zoom <= 100 ? '100%' : undefined,
-            width: scaledWidth ? `${scaledWidth}px` : undefined,
-            minWidth: zoom > 100 ? '100%' : undefined,
+            transform: `translate(${panX}px, ${panY}px) scale(${zoom / 100})`,
+            transformOrigin: '0 0',
+            willChange: isPanning ? 'transform' : 'auto',
           }}
         >
-          {zoom <= 100 && (
-            <div className="flex-shrink" style={{ flex: '1 1 auto' }} />
-          )}
-          {zoom > 100 && (
-            <div className="flex-shrink-0" style={{ width: spacerWidth }} />
-          )}
-          <div
-            className="bg-white shadow-3xl origin-top flex-shrink-0"
-            style={{
-              transform: `scale(${zoom / 100})`,
-              transformOrigin: 'top center',
-              width: viewportSizes[viewportMode].width,
-              minHeight: zoom > 100 ? '100%' : undefined,
-              height: zoom > 100 ? '100%' : (iframeHeight ? `${iframeHeight * zoom / 100}px` : 'auto'),
-              transition: 'transform 0.2s ease-out, height 0.2s ease-out',
-              willChange: 'transform',
-            }}
+          {/* Desktop Preview */}
+          <div 
+            className="flex flex-col gap-3"
+            onClick={() => setViewportMode('desktop')}
           >
-          {/* Iframe Canvas */}
-          {layers.length > 0 ? (
-            <iframe
-              ref={iframeRef}
-              src="/canvas.html"
-              className="w-full border-0"
+            <div className="text-xs font-medium text-neutral-500 px-2">Desktop</div>
+            <div
+              className={cn(
+                'bg-white shadow-xl overflow-hidden cursor-pointer',
+                viewportMode === 'desktop' && 'ring-2 ring-blue-500'
+              )}
               style={{
-                minHeight: '100%',
-                height: iframeHeight ? `${iframeHeight}px` : 'auto'
+                width: viewportSizes.desktop.width,
+                minHeight: iframeHeight ? `${iframeHeight}px` : '600px',
               }}
-              title="Canvas Preview"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center p-12">
-              <div className="text-center max-w-md relative">
-                <div className="w-20 h-20 bg-gradient-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
-                  <Icon name="layout" className="w-10 h-10 text-blue-500" />
-                </div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                  Start building
-                </h2>
-                <p className="text-gray-600 mb-8">
-                  Add your first block to begin creating your page.
-                </p>
-                <div className="relative inline-block">
-                  <Button
-                    onClick={() => setShowAddBlockPanel(!showAddBlockPanel)}
-                    size="lg"
-                    className="gap-2"
-                  >
-                    <Icon name="plus" className="w-5 h-5" />
-                    Add Block
-                  </Button>
-
-                  {/* Add Block Panel */}
-                  {showAddBlockPanel && currentPageId && (
-                    <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 z-50 bg-white border border-gray-200 rounded-lg shadow-2xl min-w-[240px]">
-                      <div className="p-2">
-                        <div className="text-xs text-gray-500 px-3 py-2 mb-1 font-medium">Choose a block</div>
-
-                        <Button
-                          onClick={() => {
-                            // Always add inside Body container
-                            addLayerFromTemplate(currentPageId, 'body', 'div');
-                            setShowAddBlockPanel(false);
-                          }}
-                          variant="ghost"
-                          className="w-full justify-start gap-3 px-3 py-3 h-auto"
-                        >
-                          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-                            <Icon name="container" className="w-5 h-5 text-gray-700" />
-                          </div>
-                          <div className="text-left">
-                            <div className="text-sm font-semibold text-gray-900">Div</div>
-                            <div className="text-xs text-gray-500">Container element</div>
-                          </div>
-                        </Button>
-
-                        <Button
-                          onClick={() => {
-                            // Always add inside Body container
-                            addLayerFromTemplate(currentPageId, 'body', 'heading');
-                            setShowAddBlockPanel(false);
-                          }}
-                          variant="ghost"
-                          className="w-full justify-start gap-3 px-3 py-3 h-auto"
-                        >
-                          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-                            <Icon name="heading" className="w-5 h-5 text-gray-700" />
-                          </div>
-                          <div className="text-left">
-                            <div className="text-sm font-semibold text-gray-900">Heading</div>
-                            <div className="text-xs text-gray-500">Title text</div>
-                          </div>
-                        </Button>
-
-                        <Button
-                          onClick={() => {
-                            // Always add inside Body container
-                            addLayerFromTemplate(currentPageId, 'body', 'p');
-                            setShowAddBlockPanel(false);
-                          }}
-                          variant="ghost"
-                          className="w-full justify-start gap-3 px-3 py-3 h-auto"
-                        >
-                          <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center shrink-0">
-                            <Icon name="type" className="w-5 h-5 text-gray-700" />
-                          </div>
-                          <div className="text-left">
-                            <div className="text-sm font-semibold text-gray-900">Paragraph</div>
-                            <div className="text-xs text-gray-500">Body text</div>
-                          </div>
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
+            >
+              {layers.length > 0 ? (
+                <iframe
+                  ref={desktopIframeRef}
+                  src="/canvas.html"
+                  className="w-full border-0"
+                  style={{
+                    height: iframeHeight ? `${iframeHeight}px` : '600px',
+                    pointerEvents: isPanning ? 'none' : 'auto',
+                  }}
+                  title="Desktop Preview"
+                />
+              ) : null}
             </div>
-          )}
           </div>
-          {zoom > 100 && (
-            <div className="flex-shrink-0" style={{ width: spacerWidth }} />
-          )}
-          {zoom <= 100 && <div className="flex-shrink" style={{ flex: '1 1 auto' }} />}
+
+          {/* Tablet Preview */}
+          <div 
+            className="flex flex-col gap-3"
+            onClick={() => setViewportMode('tablet')}
+          >
+            <div className="text-xs font-medium text-neutral-500 px-2">Tablet</div>
+            <div
+              className={cn(
+                'bg-white shadow-xl overflow-hidden cursor-pointer',
+                viewportMode === 'tablet' && 'ring-2 ring-blue-500'
+              )}
+              style={{
+                width: viewportSizes.tablet.width,
+                minHeight: iframeHeight ? `${iframeHeight}px` : '600px',
+              }}
+            >
+              {layers.length > 0 ? (
+                <iframe
+                  ref={tabletIframeRef}
+                  src="/canvas.html"
+                  className="w-full border-0"
+                  style={{
+                    height: iframeHeight ? `${iframeHeight}px` : '600px',
+                    pointerEvents: isPanning ? 'none' : 'auto',
+                  }}
+                  title="Tablet Preview"
+                />
+              ) : null}
+            </div>
+          </div>
+
+          {/* Mobile Preview */}
+          <div 
+            className="flex flex-col gap-3"
+            onClick={() => setViewportMode('mobile')}
+          >
+            <div className="text-xs font-medium text-neutral-500 px-2">Mobile</div>
+            <div
+              className={cn(
+                'bg-white shadow-xl overflow-hidden cursor-pointer',
+                viewportMode === 'mobile' && 'ring-2 ring-blue-500'
+              )}
+              style={{
+                width: viewportSizes.mobile.width,
+                minHeight: iframeHeight ? `${iframeHeight}px` : '600px',
+              }}
+            >
+              {layers.length > 0 ? (
+                <iframe
+                  ref={mobileIframeRef}
+                  src="/canvas.html"
+                  className="w-full border-0"
+                  style={{
+                    height: iframeHeight ? `${iframeHeight}px` : '600px',
+                    pointerEvents: isPanning ? 'none' : 'auto',
+                  }}
+                  title="Mobile Preview"
+                />
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
     </div>

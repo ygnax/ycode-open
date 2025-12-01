@@ -3,6 +3,23 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Disable browser zoom - we handle zoom via canvas transforms */
+body {
+  touch-action: pan-x pan-y;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+/* Re-enable text selection for inputs and contenteditable */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

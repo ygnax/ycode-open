@@ -106,6 +106,9 @@ export interface DesignProperties {
   positioning?: PositioningDesign;
 }
 
+// Breakpoint type for responsive design
+export type Breakpoint = 'base' | 'tablet' | 'desktop';
+
 export interface LayerSettings {
   id?: string;           // Custom HTML ID attribute
   hidden?: boolean;      // Element visibility in canvas
